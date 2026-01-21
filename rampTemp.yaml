@@ -1,0 +1,177 @@
+blueprint:
+  name: RampTemp
+  description: >
+    Heating-only temperature ramp. A user-selected thermostat setpoint is stored
+    in a persistent input_number as the desired target. The automation ramps the
+    working setpoint upward from room temperature toward that target. Ramp logic
+    never overwrites the stored target.
+
+  domain: automation
+
+  input:
+    climate_entity:
+      name: Mini-Split / Climate Device
+      selector:
+        entity:
+          filter:
+            - domain: climate
+
+    final_target_input:
+      name: Desired Target Temperature (input_number)
+      selector:
+        entity:
+          domain: input_number
+
+    ramp_amount:
+      name: Ramp Amount
+      default: 1.0
+      selector:
+        number:
+          min: 0.1
+          max: 5
+          step: 0.1
+
+variables:
+  climate_entity: !input climate_entity
+  final_target_input: !input final_target_input
+  ramp_amount: !input ramp_amount
+  temp_increment: 0.5
+
+trigger:
+  - platform: state
+    entity_id: !input climate_entity
+    attribute: temperature
+    id: setpoint_change
+
+  - platform: state
+    entity_id: !input climate_entity
+    attribute: current_temperature
+    id: temp_update
+
+action:
+  - variables:
+      current_temperature: "{{ state_attr(climate_entity, 'current_temperature') | float(57) }}"
+      current_setpoint: "{{ state_attr(climate_entity, 'temperature') | float(57) }}"
+      
+      # Context tracking
+      trigger_parent_id: >
+        {{ trigger.to_state.context.parent_id
+           if trigger.to_state else none }}
+
+      trigger_user_id: >
+        {{ trigger.to_state.context.user_id
+           if trigger.to_state else none }}
+           
+      # Classification
+      is_manual: "{{ trigger_user_id is not none }}"
+      is_ramp_step: "{{ trigger_parent_id is not none }}" 
+      is_remote: "{{ trigger_user_id is none and trigger_parent_id is none }}"
+      is_adjusted_step: "{{ trigger_user_id is none and (current_setpoint > current_temperature + 2) }}"
+
+  # Diagnostics
+  - service: input_text.set_value
+    target:
+      entity_id: input_text.mini_split_parent_id
+    data:
+      value: "{{ trigger_parent_id | default('none', true) }}"
+
+  - service: input_text.set_value
+    target:
+      entity_id: input_text.mini_split_user_id
+    data:
+      value: "{{ trigger_user_id | default('none', true) }}"
+      
+  - service: input_text.set_value
+    target:
+      entity_id: input_text.mini_split_adjusted_step
+    data:
+      value: "{{ is_adjusted_step }}"
+
+  # --------------------------------------------------
+  # MANUAL SETPOINT CHANGE → STORE TARGET & START RAMP
+  # --------------------------------------------------
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: setpoint_change
+          - condition: template
+            value_template: "{{ is_manual }}"
+        sequence:
+          # Turn ON ramp flag - starting new ramp
+          - service: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.ramp_in_progress
+          
+          # Save user intent (persistent)
+          - service: input_number.set_value
+            target:
+              entity_id: !input final_target_input
+            data:
+              value: "{{ current_setpoint }}"
+
+          # Immediate heating ramp start
+          - variables:
+              next_setpoint: >
+                {% set base_temp = current_temperature + ramp_amount %}
+                {% set target = states(final_target_input) | float %}
+                {% set safe_temp = [base_temp, 57] | max %}
+                {% set raw_next = [safe_temp, target] | min %}
+                {% set rounded_steps = (raw_next / temp_increment) | round(0) %}
+                {{ rounded_steps * temp_increment }}
+
+          - service: climate.set_temperature
+            target:
+              entity_id: !input climate_entity
+            data:
+              temperature: "{{ next_setpoint }}"
+
+  # --------------------------------------------------
+  # HEATING RAMP PROGRESSION
+  # --------------------------------------------------
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ current_temperature < states(final_target_input) | float }}"
+          - condition: template
+            value_template: "{{ current_setpoint < states(final_target_input) | float }}"
+            
+        sequence:
+          # Still ramping - ensure flag is ON
+          - service: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.ramp_in_progress
+              
+          - variables:
+              next_setpoint: >
+                {% set base_temp = current_temperature + ramp_amount %}
+                {% set target = states(final_target_input) | float %}
+                {% set safe_temp = [base_temp, 57] | max %}
+                {% set raw_next = [safe_temp, target] | min %}
+                {% set rounded_steps = (raw_next / temp_increment) | round(0) %}
+                {{ rounded_steps * temp_increment }}
+
+          - service: climate.set_temperature
+            target:
+              entity_id: !input climate_entity
+            data:
+              temperature: "{{ next_setpoint }}"
+
+  # --------------------------------------------------
+  # HEATING RAMP COMPLETED - Turn OFF flag
+  # --------------------------------------------------
+  - choose:
+      - conditions:
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ current_temperature >= states(final_target_input) | float }}"
+              - condition: template
+                value_template: "{{ current_setpoint >= states(final_target_input) | float }}"
+        sequence:
+          - service: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.ramp_in_progress
+              
+  - delay: '00:00:04'
+  
+mode: queued
