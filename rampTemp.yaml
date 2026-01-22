@@ -63,29 +63,30 @@ action:
            if trigger.to_state else none }}
            
       # Classification
-      is_manual: "{{ trigger_user_id is not none }}"
-      is_ramp_step: "{{ trigger_parent_id is not none }}" 
-      is_remote: "{{ trigger_user_id is none and trigger_parent_id is none }}"
-      is_adjusted_step: "{{ trigger_user_id is none and (current_setpoint > current_temperature + 2) }}"
+#      is_manual: "{{ trigger_user_id is not none }}"  LINE WAS REPLACED BELOW
+      is_manual: "{{ current_setpoint > current_temperature + 2 or current_setpoint < current_temperature }}"
+#      is_ramp_step: "{{ trigger_parent_id is not none }}" 
+#      is_remote: "{{ trigger_user_id is none and trigger_parent_id is none }}"
+#      is_adjusted_step: "{{ trigger_user_id is none and (current_setpoint > current_temperature + 2) }}"
 
-  # Diagnostics
-  - service: input_text.set_value
-    target:
-      entity_id: input_text.mini_split_parent_id
-    data:
-      value: "{{ trigger_parent_id | default('none', true) }}"
+#   # Diagnostics
+#   - service: input_text.set_value
+#     target:
+#       entity_id: input_text.mini_split_parent_id
+#     data:
+#       value: "{{ trigger_parent_id | default('none', true) }}"
 
-  - service: input_text.set_value
-    target:
-      entity_id: input_text.mini_split_user_id
-    data:
-      value: "{{ trigger_user_id | default('none', true) }}"
+#   - service: input_text.set_value
+#     target:
+#       entity_id: input_text.mini_split_user_id
+#     data:
+#       value: "{{ trigger_user_id | default('none', true) }}"
       
-  - service: input_text.set_value
-    target:
-      entity_id: input_text.mini_split_adjusted_step
-    data:
-      value: "{{ is_adjusted_step }}"
+#   - service: input_text.set_value
+#     target:
+#       entity_id: input_text.mini_split_adjusted_step
+#     data:
+#       value: "{{ is_adjusted_step }}"
 
   # --------------------------------------------------
   # MANUAL SETPOINT CHANGE → STORE TARGET & START RAMP
@@ -97,10 +98,10 @@ action:
           - condition: template
             value_template: "{{ is_manual }}"
         sequence:
-          # Turn ON ramp flag - starting new ramp
-          - service: input_boolean.turn_on
-            target:
-              entity_id: input_boolean.ramp_in_progress
+        #   # Turn ON ramp flag - starting new ramp
+        #   - service: input_boolean.turn_on
+        #     target:
+        #       entity_id: input_boolean.ramp_in_progress
           
           # Save user intent (persistent)
           - service: input_number.set_value
@@ -137,9 +138,9 @@ action:
             
         sequence:
           # Still ramping - ensure flag is ON
-          - service: input_boolean.turn_on
-            target:
-              entity_id: input_boolean.ramp_in_progress
+        #   - service: input_boolean.turn_on
+        #     target:
+        #       entity_id: input_boolean.ramp_in_progress
               
           - variables:
               next_setpoint: >
@@ -167,10 +168,10 @@ action:
                 value_template: "{{ current_temperature >= states(final_target_input) | float }}"
               - condition: template
                 value_template: "{{ current_setpoint >= states(final_target_input) | float }}"
-        sequence:
-          - service: input_boolean.turn_off
-            target:
-              entity_id: input_boolean.ramp_in_progress
+        # sequence:
+        #   - service: input_boolean.turn_off
+        #     target:
+        #       entity_id: input_boolean.ramp_in_progress
               
   - delay: '00:00:04'
   
